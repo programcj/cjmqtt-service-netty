@@ -2,6 +2,7 @@ package cj.mqtt.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,9 @@ import io.netty.handler.codec.mqtt.MqttTopicSubscription;
 import io.netty.handler.codec.mqtt.MqttUnsubAckMessage;
 import io.netty.handler.codec.mqtt.MqttUnsubscribeMessage;
 import io.netty.handler.codec.mqtt.MqttUnsubscribePayload;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
 
 public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage> {
 	private static Logger logger = LoggerFactory.getLogger(MqttServiceHandler.class);
@@ -42,16 +46,6 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		super();
 		this.mqttTopicTree = mqttTopicTree;
 	}
-
-	// MqttHandlerInterface onHandlerInterface = null;
-	//
-	// public interface MqttHandlerInterface {
-	// MqttConnectReturnCode onConnect(MqttSession mqttSession, String clientId,
-	// String username, String password);
-	//
-	// void onPublish(MqttSession mqttSession, String topicName, int Qos, int
-	// messageId, ByteBuf payload);
-	// }
 
 	@Override
 	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
@@ -74,12 +68,31 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		mqttSession = null;
 	}
 
+	/**
+	 * ctx.channel().pipeline().addFirst("TimeCheck", new IdleStateHandler(3, 0, 0, TimeUnit.SECONDS));
+	 * 
+	 * pipe添加了IdleStateHandler可以在userEventTriggered中判断超时
+	 */
+	@Override
+	public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+		if (evt instanceof IdleStateEvent) {
+			IdleStateEvent event = (IdleStateEvent) evt;
+			if (event.state() == IdleState.READER_IDLE) {
+				/* 读超时 */
+				logger.debug("Channel: timeout");
+				ctx.channel().close();
+			} else if (event.state() == IdleState.WRITER_IDLE) {
+
+			} else if (event.state() == IdleState.ALL_IDLE) {
+				/* 总超时 */
+			}
+		}
+		super.userEventTriggered(ctx, evt);
+	}
+
 	@Override
 	protected void channelRead0(ChannelHandlerContext ctx, MqttMessage msg) throws Exception {
-		MqttFixedHeader mqttFixedHeader = msg.fixedHeader();
-		MqttMessageType mqttMessageType = mqttFixedHeader.messageType();
-
-		switch (mqttMessageType) {// 消息类型判断
+		switch (msg.fixedHeader().messageType()) {// 消息类型判断
 		case CONNECT:
 			handlerConnect(ctx, msg);
 			break;
@@ -166,6 +179,8 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 
 		String clientId = mqttConnectPayload.clientIdentifier();
 		int keepTimeSeconds = connUserInfo.keepAliveTimeSeconds();
+
+		ctx.channel().pipeline().addFirst("TimeCheck", new IdleStateHandler(keepTimeSeconds, 0, 0, TimeUnit.SECONDS));
 
 		if (connUserInfo.hasUserName() && connUserInfo.hasPassword()) {
 			String username = mqttConnectPayload.userName();
