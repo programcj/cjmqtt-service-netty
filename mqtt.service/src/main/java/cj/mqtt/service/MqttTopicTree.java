@@ -17,13 +17,15 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 
 public class MqttTopicTree {
 	Map<String, List<WeakReference<MqttSession>>> topicSubMap = new HashMap<String, List<WeakReference<MqttSession>>>();
-
+	
+	@SuppressWarnings("unchecked")
 	public void close(MqttSession mqttSession) {
 		// 从topicSubMap中清除自己
 		for (Object object : mqttSession.nodeList) {
 			List<WeakReference<MqttSession>> list = (List<WeakReference<MqttSession>>) object;
 
 			Iterator<WeakReference<MqttSession>> iterator = list.iterator();
+			
 			while (iterator.hasNext()) {
 				WeakReference<MqttSession> item = iterator.next();
 				MqttSession session = item.get();
@@ -52,8 +54,12 @@ public class MqttTopicTree {
 				iterator.remove();
 				continue;
 			}
+			
+			/**
+			 * Qos需要从MqttSession中获取到此topic对应的Qos,如果为1，客户端会上报ack
+			 */
 			MqttPublishMessage msg = new MqttPublishMessage(
-					new MqttFixedHeader(MqttMessageType.PUBLISH, false, MqttQoS.AT_MOST_ONCE, false, 0),
+					new MqttFixedHeader(MqttMessageType.PUBLISH, false, Qos, false, 0),
 					new MqttPublishVariableHeader(topicName, messageId), payload.copy());
 			mqttSession.getMsgOutChannel().writeAndFlush(msg);
 		}
@@ -79,7 +85,7 @@ public class MqttTopicTree {
 		}
 	}
 
-	public void subscribe(String topicName, MqttSession mqttSession) {
+	public void subscribe(String topicName, MqttSession mqttSession, int qos) {
 		List<WeakReference<MqttSession>> list = topicSubMap.get(topicName);
 		if (list == null) {
 			list = new ArrayList<>();

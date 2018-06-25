@@ -1,5 +1,7 @@
 package cj.mqtt.service;
 
+import java.util.concurrent.TimeUnit;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -10,6 +12,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.mqtt.MqttDecoder;
 import io.netty.handler.codec.mqtt.MqttEncoder;
 import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
 
 public class ProtocolHeadAdapter extends ChannelInboundHandlerAdapter {
 	// 1 GET 请求指定的页面信息，并返回实体主体。
@@ -52,9 +55,10 @@ public class ProtocolHeadAdapter extends ChannelInboundHandlerAdapter {
 		}
 		ChannelPipeline pipeline = ctx.pipeline();
 		if (sum == mqtt_head.length) {
-			pipeline.addLast("MqttDecoder", new MqttDecoder());
-			pipeline.addLast("MqttEncoder", MqttEncoder.INSTANCE);
-			pipeline.addLast("MqttServerHandler", new MqttServiceHandler(mqttTopicTree));
+			pipeline.addFirst(MqttServiceHandler.PIPE_TIMEOUT_CHECK, new IdleStateHandler(5, 0, 0, TimeUnit.SECONDS));
+			pipeline.addLast(MqttServiceHandler.PIPE_DECODE, new MqttDecoder());
+			pipeline.addLast(MqttServiceHandler.PIPE_ENCODE, MqttEncoder.INSTANCE);
+			pipeline.addLast(MqttServiceHandler.PIPE_HANDLE, new MqttServiceHandler(mqttTopicTree));
 		} else {
 			pipeline.addLast(new HttpServerCodec());
 			pipeline.addLast(new HttpObjectAggregator(65536));

@@ -38,6 +38,11 @@ import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 
 public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage> {
+	public static String PIPE_TIMEOUT_CHECK = "MqttTimeOut";
+	public static String PIPE_DECODE = "MqttDecode";
+	public static String PIPE_ENCODE = "MqttEncoder";
+	public static String PIPE_HANDLE = "MqttServerHandler";
+
 	private static Logger logger = LoggerFactory.getLogger(MqttServiceHandler.class);
 	private MqttSession mqttSession = null;
 	private MqttTopicTree mqttTopicTree = null;
@@ -69,7 +74,8 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 	}
 
 	/**
-	 * ctx.channel().pipeline().addFirst("TimeCheck", new IdleStateHandler(3, 0, 0, TimeUnit.SECONDS));
+	 * ctx.channel().pipeline().addFirst("TimeCheck", new IdleStateHandler(3, 0,
+	 * 0, TimeUnit.SECONDS));
 	 * 
 	 * pipe添加了IdleStateHandler可以在userEventTriggered中判断超时
 	 */
@@ -102,6 +108,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 			handlerPublish(ctx, msg);
 			break;
 		case PUBACK:
+			logger.debug("this is puback message," + msg.toString());
 			break;
 		case PUBREC:
 			break;
@@ -180,7 +187,8 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		String clientId = mqttConnectPayload.clientIdentifier();
 		int keepTimeSeconds = connUserInfo.keepAliveTimeSeconds();
 
-		ctx.channel().pipeline().addFirst("TimeCheck", new IdleStateHandler(keepTimeSeconds, 0, 0, TimeUnit.SECONDS));
+		ctx.channel().pipeline().replace(MqttServiceHandler.PIPE_TIMEOUT_CHECK, MqttServiceHandler.PIPE_TIMEOUT_CHECK,
+				new IdleStateHandler(keepTimeSeconds, 0, 0, TimeUnit.SECONDS));
 
 		if (connUserInfo.hasUserName() && connUserInfo.hasPassword()) {
 			String username = mqttConnectPayload.userName();
@@ -197,7 +205,6 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 			if (connUserInfo.hasUserName())
 				mqttSession.setUserName(mqttConnectPayload.userName());
 			mqttSession.setMsgOutChannel(ctx.channel());
-
 		}
 
 		MqttConnAckVariableHeader mqttConnAckVariableHeader = new MqttConnAckVariableHeader(connectReturnCode, true);
@@ -270,10 +277,15 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		List<MqttTopicSubscription> topicSubscriptions = mqttSubscribePayload.topicSubscriptions();
 		logger.debug("subscribe: " + topicSubscriptions);
 
+		MqttQoS qosAck = MqttQoS.AT_LEAST_ONCE;
+
 		for (MqttTopicSubscription topicSubscription : topicSubscriptions) {
 			String topicName = topicSubscription.topicName();
-			// topicSubscription.qualityOfService().value();
-			mqttTopicTree.subscribe(topicName, mqttSession);
+			mqttTopicTree.subscribe(topicName, mqttSession, topicSubscription.qualityOfService().value());
+
+			if (topicSubscription.qualityOfService().value() >= MqttQoS.EXACTLY_ONCE.value()) {
+				qosAck = MqttQoS.FAILURE;
+			}
 		}
 
 		// save topic-names and Qos
@@ -281,8 +293,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 
 		// service return list
 		MqttSubAckPayload mqttSubAckPayload = new MqttSubAckPayload(grantedQoSLevels);
-		MqttFixedHeader mqttFixedHeader = new MqttFixedHeader(MqttMessageType.SUBACK, false, MqttQoS.AT_MOST_ONCE,
-				false, messageId);
+		MqttFixedHeader mqttFixedHeader = new MqttFixedHeader(MqttMessageType.SUBACK, false, qosAck, false, messageId);
 		MqttSubAckMessage mqttSubAckMessage = new MqttSubAckMessage(mqttFixedHeader, mqttMessageIdVariableHeader,
 				mqttSubAckPayload);
 		ctx.writeAndFlush(mqttSubAckMessage);
