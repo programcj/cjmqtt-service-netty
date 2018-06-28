@@ -108,7 +108,9 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 			handlerPublish(ctx, msg);
 			break;
 		case PUBACK:
-			logger.debug("this is puback message," + msg.toString());
+			//logger.debug("this is puback message," + msg.toString());
+			//
+			mqttSession.publistNext();
 			break;
 		case PUBREC:
 			break;
@@ -188,7 +190,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		int keepTimeSeconds = connUserInfo.keepAliveTimeSeconds();
 
 		ctx.channel().pipeline().replace(MqttServiceHandler.PIPE_TIMEOUT_CHECK, MqttServiceHandler.PIPE_TIMEOUT_CHECK,
-				new IdleStateHandler(keepTimeSeconds, 0, 0, TimeUnit.SECONDS));
+				new IdleStateHandler(keepTimeSeconds+20, 0, 0, TimeUnit.SECONDS));
 
 		if (connUserInfo.hasUserName() && connUserInfo.hasPassword()) {
 			String username = mqttConnectPayload.userName();
@@ -213,6 +215,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		MqttConnAckMessage mqttConnAckMessage = new MqttConnAckMessage(mqttFixedHeader, mqttConnAckVariableHeader);
 
 		ctx.writeAndFlush(mqttConnAckMessage);
+		
 		if (mqttConnAckMessage.variableHeader().connectReturnCode() != MqttConnectReturnCode.CONNECTION_ACCEPTED) {
 			ctx.close();
 		}

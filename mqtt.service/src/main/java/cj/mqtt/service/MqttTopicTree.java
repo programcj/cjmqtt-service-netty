@@ -2,124 +2,146 @@ package cj.mqtt.service;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.handler.codec.mqtt.MqttFixedHeader;
-import io.netty.handler.codec.mqtt.MqttMessageType;
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
-import io.netty.handler.codec.mqtt.MqttPublishVariableHeader;
 import io.netty.handler.codec.mqtt.MqttQoS;
 
 public class MqttTopicTree {
-	Map<String, List<WeakReference<MqttSession>>> topicSubMap = new HashMap<String, List<WeakReference<MqttSession>>>();
-	
+
+	// 主题订阅者
+	class TopicItem {
+		WeakReference<MqttSession> mqttSession;
+		int subQos;
+
+		public TopicItem(MqttSession mqttSession, int subQos) {
+			super();
+			this.mqttSession = new WeakReference<MqttSession>(mqttSession);
+			this.subQos = subQos;
+		}
+
+		public TopicItem() {
+		}
+	}
+
+	// Qos ?
+	Map<String, List<TopicItem>> topicSubMap = new ConcurrentHashMap<String, List<TopicItem>>();
+
 	@SuppressWarnings("unchecked")
 	public void close(MqttSession mqttSession) {
 		// 从topicSubMap中清除自己
-		for (Object object : mqttSession.nodeList) {
-			List<WeakReference<MqttSession>> list = (List<WeakReference<MqttSession>>) object;
 
-			Iterator<WeakReference<MqttSession>> iterator = list.iterator();
-			
+		mqttSession.clearTopicNode(new MqttSession.TopicNodeInterface() {
+
+			@Override
+			public void onItem(MqttSession mqttSession, Object obj) {
+				List<TopicItem> list = (List<TopicItem>) obj;
+
+				synchronized (list) {
+					Iterator<TopicItem> iterator = list.iterator();
+					while (iterator.hasNext()) {
+						TopicItem item = iterator.next();
+						MqttSession session = item.mqttSession.get();
+						if (session == null) {
+							iterator.remove();
+							continue;
+						}
+						if (session == mqttSession) {
+							iterator.remove();
+						}
+					}
+				}
+				/// end
+			}
+		});
+
+	}
+
+	public void publish(String topicName, int messageId, MqttQoS Qos, ByteBuf payload) {
+		List<TopicItem> list = topicSubMap.get(topicName);
+		if (list == null)
+			return;
+		synchronized (list) {
+			Iterator<TopicItem> iterator = list.iterator();
 			while (iterator.hasNext()) {
-				WeakReference<MqttSession> item = iterator.next();
-				MqttSession session = item.get();
+				TopicItem item = iterator.next();
+				MqttSession mqttSession = item.mqttSession.get();
+				if (mqttSession == null) {
+					iterator.remove();
+					continue;
+				}
+				mqttSession.publish(topicName, payload, item.subQos);
+			}
+		}
+	}
+
+	public void unSub(String topicName, MqttSession mqttSession) {
+		List<TopicItem> list = topicSubMap.get(topicName);
+		if (list == null) {
+			return;
+		}
+		synchronized (list) {
+			Iterator<TopicItem> iterator = list.iterator();
+			while (iterator.hasNext()) {
+				TopicItem item = iterator.next();
+				MqttSession session = item.mqttSession.get();
 				if (session == null) {
 					iterator.remove();
 					continue;
 				}
 				if (session == mqttSession) {
 					iterator.remove();
-					// mqttSession.nodeList.remove(list);
+					mqttSession.removeTopicNode(list);
 				}
 			}
 		}
 	}
 
-	public void publish(String topicName, int messageId, MqttQoS Qos, ByteBuf payload) {
-		List<WeakReference<MqttSession>> list = topicSubMap.get(topicName);
-		if (list == null)
-			return;
-		Iterator<WeakReference<MqttSession>> iterator = list.iterator();
-
-		while (iterator.hasNext()) {
-			WeakReference<MqttSession> item = iterator.next();
-			MqttSession mqttSession = item.get();
-			if (mqttSession == null) {
-				iterator.remove();
-				continue;
-			}
-			
-			/**
-			 * Qos需要从MqttSession中获取到此topic对应的Qos,如果为1，客户端会上报ack
-			 */
-			MqttPublishMessage msg = new MqttPublishMessage(
-					new MqttFixedHeader(MqttMessageType.PUBLISH, false, Qos, false, 0),
-					new MqttPublishVariableHeader(topicName, messageId), payload.copy());
-			mqttSession.getMsgOutChannel().writeAndFlush(msg);
-		}
-	}
-
-	public void unSub(String topicName, MqttSession mqttSession) {
-		List<WeakReference<MqttSession>> list = topicSubMap.get(topicName);
-		if (list == null) {
-			return;
-		}
-		Iterator<WeakReference<MqttSession>> iterator = list.iterator();
-		while (iterator.hasNext()) {
-			WeakReference<MqttSession> item = iterator.next();
-			MqttSession session = item.get();
-			if (session == null) {
-				iterator.remove();
-				continue;
-			}
-			if (session == mqttSession) {
-				iterator.remove();
-				mqttSession.nodeList.remove(list);
-			}
-		}
-	}
-
 	public void subscribe(String topicName, MqttSession mqttSession, int qos) {
-		List<WeakReference<MqttSession>> list = topicSubMap.get(topicName);
-		if (list == null) {
-			list = new ArrayList<>();
-			topicSubMap.put(topicName, list);
-		}
-
-		Iterator<WeakReference<MqttSession>> iterator = list.iterator();
-		while (iterator.hasNext()) {
-			WeakReference<MqttSession> item = iterator.next();
-			MqttSession session = item.get();
-			if (session == null) {
-				iterator.remove();
-				continue;
+		List<TopicItem> list = null;
+		synchronized (topicSubMap) {
+			list = topicSubMap.get(topicName);
+			if (list == null) {
+				list = Collections.synchronizedList(new ArrayList<TopicItem>());
+				topicSubMap.put(topicName, list);
 			}
-			if (session == mqttSession)
-				return;
 		}
 
-		list.add(new WeakReference<MqttSession>(mqttSession));
+		synchronized (list) {
+			Iterator<TopicItem> iterator = list.iterator();
+			while (iterator.hasNext()) {
+				TopicItem item = iterator.next();
+				MqttSession session = item.mqttSession.get();
+				if (session == null) {
+					iterator.remove();
+					continue;
+				}
+				if (session == mqttSession)
+					return;
+			}
 
-		mqttSession.nodeList.add(list);
+			list.add(new TopicItem(mqttSession, qos));
+		}
+
+		mqttSession.addTopicNode(list);
 	}
 
 	public void debug() {
 		System.out.println("==== topic list begin =====");
-		Iterator<Entry<String, List<WeakReference<MqttSession>>>> iterator = topicSubMap.entrySet().iterator();
+		Iterator<Entry<String, List<TopicItem>>> iterator = topicSubMap.entrySet().iterator();
 		while (iterator.hasNext()) {
-			Entry<String, List<WeakReference<MqttSession>>> next = iterator.next();
+			Entry<String, List<TopicItem>> next = iterator.next();
 
 			System.out.println(">" + next.getKey());
 
-			List<WeakReference<MqttSession>> value = next.getValue();
-			for (WeakReference<MqttSession> weakReference : value) {
-				MqttSession mqttSession = weakReference.get();
+			List<TopicItem> value = next.getValue();
+			for (TopicItem item : value) {
+				MqttSession mqttSession = item.mqttSession.get();
 				if (mqttSession != null) {
 					System.out.println("\t" + mqttSession.toString());
 				}
