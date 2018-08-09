@@ -13,6 +13,19 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttQoS;
 
 public class MqttTopicTree {
+	Map<String, MqttSession> allMqttSessions = new ConcurrentHashMap<>();
+
+	public void addMqttSession(MqttSession session) {
+		allMqttSessions.put(session.getClientId(), session);
+	}
+
+	public void removeMqttSession(MqttSession session) {
+		allMqttSessions.remove(session.getClientId());
+	}
+
+	public MqttSession getMqttSession(String clientId) {
+		return allMqttSessions.get(clientId);
+	}
 
 	// 主题订阅者
 	class TopicItem {
@@ -61,8 +74,8 @@ public class MqttTopicTree {
 		});
 
 	}
-
-	public void publish(String topicName, int messageId, MqttQoS Qos, ByteBuf payload) {
+	
+	public void publish(String topicName, MqttQoS Qos, ByteBuf payload) {
 		List<TopicItem> list = topicSubMap.get(topicName);
 		if (list == null)
 			return;
@@ -75,7 +88,7 @@ public class MqttTopicTree {
 					iterator.remove();
 					continue;
 				}
-				mqttSession.publish(topicName, payload, item.subQos);
+				mqttSession.publish(topicName, payload, item.subQos, null);
 			}
 		}
 	}
@@ -150,4 +163,5 @@ public class MqttTopicTree {
 
 		System.out.println("==== topic list end =====");
 	}
+
 }

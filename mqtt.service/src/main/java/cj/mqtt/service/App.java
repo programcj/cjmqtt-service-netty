@@ -10,6 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -18,6 +22,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.mqtt.MqttQoS;
 
 /**
  * Hello world!
@@ -48,6 +53,46 @@ public class App {
 							logger.debug("gc");
 							System.gc();
 						}
+						if (value.equals("publish-test")) {
+							String msg = "hello my is server!";
+							ByteBuf payload = Unpooled.buffer(30);
+
+							for (int i = 0; i < 10; i++) {
+								msg = "hello my is server!" + i;
+								payload.writeBytes(msg.getBytes());
+								 mqttTopicTree.publish("broadtopic",MqttQoS.AT_LEAST_ONCE, payload);
+								final Object wait = new Object();
+
+								MqttSession mqttSession = mqttTopicTree.getMqttSession("MQTT_FX_Client");
+								
+								if (mqttSession != null) {
+									mqttSession.publish("clienttopic", payload, MqttQoS.AT_LEAST_ONCE.value(),
+											new MqttSession.PubACKReceiver() {
+
+												@Override
+												public void onPublishACK(int messageId) {
+													logger.debug("----------------------------------");
+													synchronized (wait) {
+														wait.notifyAll();
+													}
+												}
+											});
+								} else {
+									logger.debug("not find client");
+								}
+
+								synchronized (wait) {
+									try {
+										wait.wait(1000 * 5);
+									} catch (InterruptedException e) {
+										e.printStackTrace();
+									}
+								}
+
+								// need wiat ACK
+								payload.clear();
+							}
+						}
 					}
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -63,7 +108,7 @@ public class App {
 		EventLoopGroup workerGroup = new NioEventLoopGroup();
 		try {
 			ServerBootstrap b = new ServerBootstrap(); // (2)
-			
+
 			b.group(bossGroup, workerGroup).channel(NioServerSocketChannel.class) // (3)
 					.childHandler(new ChannelInitializer<SocketChannel>() { // (4)
 						@Override

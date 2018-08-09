@@ -69,6 +69,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 	public void channelInactive(ChannelHandlerContext ctx) throws Exception { // (6)
 		Channel channel = ctx.channel();
 		logger.debug("Channel:" + channel.id() + "," + "掉线 " + mqttSession.toString());
+		mqttTopicTree.removeMqttSession(mqttSession);
 		mqttTopicTree.close(mqttSession);
 		mqttSession = null;
 	}
@@ -108,9 +109,14 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 			handlerPublish(ctx, msg);
 			break;
 		case PUBACK:
-			//logger.debug("this is puback message," + msg.toString());
+			logger.debug("this is puback message," + msg.toString());
 			//
-			mqttSession.publistNext();
+			if (msg instanceof MqttPubAckMessage) {
+				MqttPubAckMessage pubAckMsg = (MqttPubAckMessage) msg;
+				pubAckMsg.variableHeader().messageId();
+
+				mqttSession.handlerACKMessageId(pubAckMsg.variableHeader().messageId());
+			}
 			break;
 		case PUBREC:
 			break;
@@ -189,8 +195,13 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		String clientId = mqttConnectPayload.clientIdentifier();
 		int keepTimeSeconds = connUserInfo.keepAliveTimeSeconds();
 
+		MqttSession privSession = mqttTopicTree.getMqttSession(clientId);
+		if (privSession != null) { // 关闭上次连接
+			privSession.getChannel().close();
+		}
+
 		ctx.channel().pipeline().replace(MqttServiceHandler.PIPE_TIMEOUT_CHECK, MqttServiceHandler.PIPE_TIMEOUT_CHECK,
-				new IdleStateHandler(keepTimeSeconds+20, 0, 0, TimeUnit.SECONDS));
+				new IdleStateHandler(keepTimeSeconds + 20, 0, 0, TimeUnit.SECONDS));
 
 		if (connUserInfo.hasUserName() && connUserInfo.hasPassword()) {
 			String username = mqttConnectPayload.userName();
@@ -206,7 +217,9 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 			mqttSession.setClientId(clientId);
 			if (connUserInfo.hasUserName())
 				mqttSession.setUserName(mqttConnectPayload.userName());
-			mqttSession.setMsgOutChannel(ctx.channel());
+			mqttSession.setChannel(ctx.channel());
+
+			mqttTopicTree.addMqttSession(mqttSession);
 		}
 
 		MqttConnAckVariableHeader mqttConnAckVariableHeader = new MqttConnAckVariableHeader(connectReturnCode, true);
@@ -215,7 +228,7 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 		MqttConnAckMessage mqttConnAckMessage = new MqttConnAckMessage(mqttFixedHeader, mqttConnAckVariableHeader);
 
 		ctx.writeAndFlush(mqttConnAckMessage);
-		
+
 		if (mqttConnAckMessage.variableHeader().connectReturnCode() != MqttConnectReturnCode.CONNECTION_ACCEPTED) {
 			ctx.close();
 		}
@@ -243,12 +256,12 @@ public class MqttServiceHandler extends SimpleChannelInboundHandler<MqttMessage>
 				+ new String(dst));
 
 		// 需要转发给其他客服端
-		mqttTopicTree.publish(topicName, variableHeader.messageId(), mqttFixedHeader.qosLevel(), payload);
+		mqttTopicTree.publish(topicName, mqttFixedHeader.qosLevel(), payload);
 
 		switch (mqttFixedHeader.qosLevel()) {
 		case AT_MOST_ONCE:
 			break;
-		case AT_LEAST_ONCE: {
+		case AT_LEAST_ONCE: { // 回复Publish ACK
 			int messageId = variableHeader.messageId();
 			MqttFixedHeader a = new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 0);
 			MqttPubAckMessage ack = new MqttPubAckMessage(a, MqttMessageIdVariableHeader.from(messageId));
